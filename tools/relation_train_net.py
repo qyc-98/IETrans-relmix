@@ -70,11 +70,12 @@ def train(cfg, local_rank, distributed, logger):
 
 
 
-
+    
     ###
-    model.roi_heads.box.predictor.cls_score = torch.nn.Linear(4096,1)
+    model.roi_heads.box.predictor.cls_score = torch.nn.Linear(4096,151)
     model.roi_heads.box.predictor.bbox_pred = torch.nn.Linear(4096,1)
     ###
+    print(model)
 
 
 

@@ -65,6 +65,9 @@ def main():
     logger.info("\n" + collect_env_info())
 
     model = build_detection_model(cfg)
+    model.roi_heads.box.predictor.cls_score = torch.nn.Linear(4096,151)
+    model.roi_heads.box.predictor.bbox_pred = torch.nn.Linear(4096,1)
+    print(model)
     model.to(cfg.MODEL.DEVICE)
 
     # Initialize mixed-precision if necessary

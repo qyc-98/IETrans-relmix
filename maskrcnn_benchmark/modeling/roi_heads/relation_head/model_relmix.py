@@ -35,7 +35,7 @@ class Cumix_head(nn.Module):
         return hubness_loss
 
     # spo_feat is concatenation of SPO
-    def forward(self, prd_vis_embeddings, prd_labels, prd_weights):
+    def forward(self, sub, sub_l, obj, obj_l, prd_vis_embeddings, prd_labels, prd_weights):
         device_id = prd_vis_embeddings.get_device()
         mixed_prd_cls_scores = None
         mixed_prd_labels = None
@@ -65,9 +65,9 @@ class Cumix_head(nn.Module):
                 indices_2 = indices[partition_num : partition_num*2]
                 indices_3 = indices[partition_num*2 : partition_num*3]
 
-            mixed_prd_embeddings, mixed_prd_labels  = \
-                cumix(prd_vis_embeddings, prd_labels, indices_1, indices_2, indices_3, device_id, self.cfg)
-        return mixed_prd_embeddings, mixed_prd_labels
+            mix_sub_embs, mix_sub_labels, mix_obj_embs, mix_obj_labels, mixed_prd_embeddings, mixed_prd_labels  = \
+                cumix(sub, sub_l, obj, obj_l, prd_vis_embeddings, prd_labels, indices_1, indices_2, indices_3, device_id, self.cfg)
+        return mix_sub_embs, mix_sub_labels, mix_obj_embs, mix_obj_labels, mixed_prd_embeddings, mixed_prd_labels
 
 
 def create_one_hot(y, classes, device_id):
@@ -77,7 +77,7 @@ def create_one_hot(y, classes, device_id):
     return y_onehot
 
 
-def cumix(prd_vis_embeddings, prd_labels, indices_1, indices_2, indices_3, device_id, cfg):
+def cumix(sbj_vis_embeddings, sbj_labels, obj_vis_embeddings, obj_labels, prd_vis_embeddings, prd_labels, indices_1, indices_2, indices_3, device_id, cfg):
     if cfg.MODEL.RANDOM_LAMBDA:
         lamda = torch.from_numpy(RG.beta(0.8, 0.8, [indices_1.shape[0], 1])).float().cuda(device_id)
     else:
@@ -100,26 +100,26 @@ def cumix(prd_vis_embeddings, prd_labels, indices_1, indices_2, indices_3, devic
         #mixed_obj_labels = lamda * obj_one_hot_labels[indices_1] + (1 - lamda)*(obj_one_hot_labels[indices_2])
         mixed_prd_labels = lamda * prd_one_hot_labels[indices_1] + (1 - lamda)*(prd_one_hot_labels[indices_2])
     else:
-        #mixed_sbj_embeddings = lamda * sbj_vis_embeddings[indices_1] + (1 - lamda)*(alpha1 * sbj_vis_embeddings[indices_2] + \
-         #      (1 - alpha1) * sbj_vis_embeddings[indices_3])
-        #mixed_obj_embeddings = lamda * obj_vis_embeddings[indices_1] + (1 - lamda)*(alpha1 * obj_vis_embeddings[indices_2] + \
-        #       (1 - alpha1) * obj_vis_embeddings[indices_3])
+        mixed_sbj_embeddings = lamda * sbj_vis_embeddings[indices_1] + (1 - lamda)*(alpha1 * sbj_vis_embeddings[indices_2] + \
+              (1 - alpha1) * sbj_vis_embeddings[indices_3])
+        mixed_obj_embeddings = lamda * obj_vis_embeddings[indices_1] + (1 - lamda)*(alpha1 * obj_vis_embeddings[indices_2] + \
+              (1 - alpha1) * obj_vis_embeddings[indices_3])
         mixed_prd_embeddings = lamda * prd_vis_embeddings[indices_1] + (1 - lamda)*(alpha1 * prd_vis_embeddings[indices_2] + \
                (1 - alpha1) * prd_vis_embeddings[indices_3])
 
-        #sbj_one_hot_labels = create_one_hot(sbj_labels, cfg.MODEL.NUM_CLASSES -1, device_id)
+        sbj_one_hot_labels = create_one_hot(sbj_labels, cfg.MODEL.ROI_BOX_HEAD.NUM_CLASSES, device_id)
         prd_one_hot_labels = create_one_hot(prd_labels, cfg.MODEL.ROI_RELATION_HEAD.NUM_CLASSES, device_id)
-        #obj_one_hot_labels = create_one_hot(obj_labels, cfg.MODEL.NUM_CLASSES -1, device_id)
+        obj_one_hot_labels = create_one_hot(obj_labels, cfg.MODEL.ROI_BOX_HEAD.NUM_CLASSES, device_id)
 
-        #mixed_sbj_labels = lamda * sbj_one_hot_labels[indices_1] + (1 - lamda)*(alpha1 * sbj_one_hot_labels[indices_2] + \
-         #       (1 - alpha1) * sbj_one_hot_labels[indices_3])
-        #mixed_obj_labels = lamda * obj_one_hot_labels[indices_1] + (1 - lamda)*(alpha1 * obj_one_hot_labels[indices_2] + \
-        #        (1 - alpha1) * obj_one_hot_labels[indices_3])
+        mixed_sbj_labels = lamda * sbj_one_hot_labels[indices_1] + (1 - lamda)*(alpha1 * sbj_one_hot_labels[indices_2] + \
+               (1 - alpha1) * sbj_one_hot_labels[indices_3])
+        mixed_obj_labels = lamda * obj_one_hot_labels[indices_1] + (1 - lamda)*(alpha1 * obj_one_hot_labels[indices_2] + \
+               (1 - alpha1) * obj_one_hot_labels[indices_3])
         mixed_prd_labels = lamda * prd_one_hot_labels[indices_1] + (1 - lamda)*(alpha1 * prd_one_hot_labels[indices_2] + \
                 (1 - alpha1) * prd_one_hot_labels[indices_3])
     
-    return mixed_prd_embeddings, mixed_prd_labels
-    #return mixed_sbj_embeddings, mixed_sbj_labels, mixed_obj_embeddings, mixed_obj_labels, mixed_prd_embeddings, mixed_prd_labels
+    # return mixed_prd_embeddings, mixed_prd_labels
+    return mixed_sbj_embeddings, mixed_sbj_labels, mixed_obj_embeddings, mixed_obj_labels, mixed_prd_embeddings, mixed_prd_labels
 
 
 def manual_CE(predictions, labels):
@@ -188,22 +188,22 @@ def get_freq_from_dict(freq_dict, categories):
             freqs[i] = 0
     return freqs
 
-for ii in range(5):
-    bgnn = torch.load(a[ii])
-    c = ['labels', 'attributes', 'pred_labels', 'pred_scores', 'rel_pair_idxs', 'pred_rel_scores', 'pred_rel_labels']
-    preds = bgnn['predictions']
+# for ii in range(5):
+#     bgnn = torch.load(a[ii])
+#     c = ['labels', 'attributes', 'pred_labels', 'pred_scores', 'rel_pair_idxs', 'pred_rel_scores', 'pred_rel_labels']
+#     preds = bgnn['predictions']
 
-import torch
-a  = torch.load('eval_results.pytorch')
-c = ['labels', 'attributes', 'pred_labels', 'pred_scores', 'rel_pair_idxs', 'pred_rel_scores', 'pred_rel_labels']
+# import torch
+# a  = torch.load('eval_results.pytorch')
+# c = ['labels', 'attributes', 'pred_labels', 'pred_scores', 'rel_pair_idxs', 'pred_rel_scores', 'pred_rel_labels']
 
-for x in range(len(a['predictions'])):
-    for y in a['predictions'][x].__dict__['extra_fields'].keys():
-        if y in c:
-            continue
-        else:
-            a['predictions'][x].__dict__['extra_fields'][y]=None
+# for x in range(len(a['predictions'])):
+#     for y in a['predictions'][x].__dict__['extra_fields'].keys():
+#         if y in c:
+#             continue
+#         else:
+#             a['predictions'][x].__dict__['extra_fields'][y]=None
 
 
 
-torch.save(a, '25000_35000.pytorch')
+# torch.save(a, '25000_35000.pytorch')

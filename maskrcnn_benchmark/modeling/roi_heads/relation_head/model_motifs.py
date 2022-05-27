@@ -146,6 +146,9 @@ class DecoderRNN(nn.Module):
         out_commitments = []
 
         end_ind = 0
+        
+        obj_reps_for_mix = []
+
         for i, l_batch in enumerate(batch_lengths):
             start_ind = end_ind
             end_ind = end_ind + l_batch
@@ -164,6 +167,7 @@ class DecoderRNN(nn.Module):
 
             pred_dist = self.out_obj(previous_state)
             out_dists.append(pred_dist)
+            obj_reps_for_mix.append(previous_state)
 
             if self.training:
                 labels_to_embed = labels[start_ind:end_ind].clone()
@@ -202,7 +206,7 @@ class DecoderRNN(nn.Module):
         else:
             out_commitments = torch.cat(out_commitments, 0)
 
-        return torch.cat(out_dists, 0), out_commitments
+        return torch.cat(out_dists, 0), out_commitments, torch.cat(obj_reps_for_mix, 0)
 
 
 class LSTMContext(nn.Module):
@@ -318,7 +322,7 @@ class LSTMContext(nn.Module):
         # Decode in order
         if self.mode != 'predcls':
             decoder_inp = PackedSequence(decoder_inp, ls_transposed)
-            obj_dists, obj_preds = self.decoder_rnn(
+            obj_dists, obj_preds, obj_reps = self.decoder_rnn(
                 decoder_inp, #obj_dists[perm],
                 labels=obj_labels[perm] if obj_labels is not None else None,
                 boxes_for_nms=boxes_per_cls[perm] if boxes_per_cls is not None else None,
@@ -331,7 +335,7 @@ class LSTMContext(nn.Module):
             obj_dists = to_onehot(obj_preds, self.num_obj_classes)
         encoder_rep = encoder_rep[inv_perm]
 
-        return obj_dists, obj_preds, encoder_rep, perm, inv_perm, ls_transposed
+        return obj_dists, obj_preds, encoder_rep, perm, inv_perm, ls_transposed, obj_reps
 
     def edge_ctx(self, inp_feats, perm, inv_perm, ls_transposed):
         """
@@ -363,7 +367,7 @@ class LSTMContext(nn.Module):
             obj_embed = self.obj_embed1(obj_labels.long())
         else:
             obj_logits = cat([proposal.get_field("predict_logits") for proposal in proposals], dim=0).detach()
-            obj_embed = F.softmax(obj_logits, dim=1) @ self.obj_embed1.weight
+            obj_embed = F.softmax(obj_logits, dim=1) @ self.obj_embed1.weight[:151, :]
         
         assert proposals[0].mode == 'xyxy'
         pos_embed = self.pos_embed(encode_box_info(proposals))
@@ -379,7 +383,7 @@ class LSTMContext(nn.Module):
             boxes_per_cls = cat([proposal.get_field('boxes_per_cls') for proposal in proposals], dim=0) # comes from post process of box_head
 
         # object level contextual feature
-        obj_dists, obj_preds, obj_ctx, perm, inv_perm, ls_transposed = self.obj_ctx(obj_pre_rep, proposals, obj_labels, boxes_per_cls, ctx_average=ctx_average)
+        obj_dists, obj_preds, obj_ctx, perm, inv_perm, ls_transposed, obj_reps = self.obj_ctx(obj_pre_rep, proposals, obj_labels, boxes_per_cls, ctx_average=ctx_average)
         # edge level contextual feature
         obj_embed2 = self.obj_embed2(obj_preds.long())
 
@@ -395,4 +399,4 @@ class LSTMContext(nn.Module):
             self.untreated_obj_feat = self.moving_average(self.untreated_obj_feat, obj_pre_rep)
             self.untreated_edg_feat = self.moving_average(self.untreated_edg_feat, cat((obj_embed2, x), -1))
 
-        return obj_dists, obj_preds, edge_ctx, None
+        return obj_dists, obj_preds, obj_reps, edge_ctx, None

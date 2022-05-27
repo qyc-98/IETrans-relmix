@@ -4,6 +4,7 @@ INPUT:
   MIN_SIZE_TEST: 600
   MAX_SIZE_TEST: 1000
 MODEL:
+  MIXUP: false
   META_ARCHITECTURE: "GeneralizedRCNN"
   WEIGHT: "catalog://ImageNetPretrained/FAIR/20171220/X-101-32x8d"
   BACKBONE:
@@ -55,6 +56,7 @@ MODEL:
     ATTRIBUTE_BGFG_SAMPLE: True    
     ATTRIBUTE_BGFG_RATIO: 3        
   ROI_RELATION_HEAD:
+    PREDICT_USE_BIAS: false
     USE_GT_BOX: True
     USE_GT_OBJECT_LABEL: True
     REQUIRE_BOX_OVERLAP: False              # for sgdet, during training, only train pairs with overlap
@@ -71,7 +73,8 @@ MODEL:
     # PREDICTOR: "MotifPredictor"
     #PREDICTOR: "VCTreePredictor"
     #PREDICTOR: "TransformerPredictor"
-    PREDICTOR: "CausalAnalysisPredictor"
+    # PREDICTOR: "CausalAnalysisPredictor"
+    PREDICTOR: "CumixMotifPredictor"
     ################# Parameters for Motif Predictor ##################
     CONTEXT_OBJ_LAYER: 1
     CONTEXT_REL_LAYER: 1
@@ -119,7 +122,7 @@ SOLVER:
     COOLDOWN: 0
     FACTOR: 0.1
     MAX_DECAY_STEP: 3
-OUTPUT_DIR: './output/relation_baseline'
+OUTPUT_DIR: './output/relmix_sgcls'
 TEST:
   ALLOW_LOAD_FROM_CACHE: False
   RELATION:
@@ -127,4 +130,4 @@ TEST:
     REQUIRE_OVERLAP: False
     LATER_NMS_PREDICTION_THRES: 0.5
   CUSTUM_EVAL: False       # eval SGDet model on custum images, output a json
-  CUSTUM_PATH: '.'         # the folder that contains the custum images, only jpg files are allowed  
+  CUSTUM_PATH: '/data_local/chenqianyu/Scene-Graph-Benchmark.pytorch/datasets/vg/VG-100K/'         # the folder that contains the custum images, only jpg files are allowed  

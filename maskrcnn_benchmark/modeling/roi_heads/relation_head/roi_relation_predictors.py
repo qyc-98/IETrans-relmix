@@ -40,6 +40,7 @@ class CumixMotifPredictor(nn.Module):
         statistics = get_dataset_statistics(config)
         obj_classes, rel_classes, att_classes = statistics['obj_classes'], statistics['rel_classes'], statistics['att_classes']
         assert self.num_obj_cls==len(obj_classes)
+        
         assert self.num_att_cls==len(att_classes)
         assert self.num_rel_cls==len(rel_classes)
         # init contextual lstm encoding
@@ -52,7 +53,7 @@ class CumixMotifPredictor(nn.Module):
         #CUMIX RELMIX
         self.cumix_head = Cumix_head(in_channels, config)
         
-        vg_dict = json.load(open('/home/chenqianyu/Scene-Graph-Benchmark.pytorch/datasets/vg/VG-dicts.json','r'))
+        vg_dict = json.load(open('/data_local/chenqianyu/Scene-Graph-Benchmark.pytorch/datasets/vg/VG-dicts.json','r'))
         categories_count = vg_dict['predicate_count']
         categories_id = vg_dict['predicate_to_idx']
         no_bg_prd_freq = get_freq_from_dict(categories_count, categories_id)
@@ -84,9 +85,9 @@ class CumixMotifPredictor(nn.Module):
         else:
             self.union_single_not_match = False
 
-        if self.use_bias:
+        # if self.use_bias:
             # convey statistics into FrequencyBias to avoid loading again
-            self.freq_bias = FrequencyBias(config, statistics)
+            # self.freq_bias = FrequencyBias(config, statistics)
 
     def forward(self, proposals, rel_pair_idxs, rel_labels, rel_binarys, roi_features, union_features, logger=None):
         """
@@ -100,7 +101,9 @@ class CumixMotifPredictor(nn.Module):
         if self.attribute_on:
             obj_dists, obj_preds, att_dists, edge_ctx = self.context_layer(roi_features, proposals, logger)
         else:
-            obj_dists, obj_preds, edge_ctx, _ = self.context_layer(roi_features, proposals, logger)
+            obj_dists, obj_preds, obj_reps, edge_ctx, _ = self.context_layer(roi_features, proposals, logger)
+
+        fg_labels = cat([proposal.get_field("labels") for proposal in proposals], dim=0)
 
         # post decode
         edge_rep = self.post_emb(edge_ctx)
@@ -115,17 +118,33 @@ class CumixMotifPredictor(nn.Module):
         head_reps = head_rep.split(num_objs, dim=0)
         tail_reps = tail_rep.split(num_objs, dim=0)
         obj_preds = obj_preds.split(num_objs, dim=0)
-        
+        obj_reps_ = obj_reps.split(num_objs, dim=0)
+        fg_labels = fg_labels.split(num_objs, dim=0)
         prod_reps = []
         pair_preds = []
-        for pair_idx, head_rep, tail_rep, obj_pred in zip(rel_pair_idxs, head_reps, tail_reps, obj_preds):
+        sub_reps = []
+        obj_reps = []
+        sub_labels = []
+        obj_labels = []
+
+        for pair_idx, head_rep, tail_rep, obj_pred, edge_rep, fg_label in zip(rel_pair_idxs, head_reps, tail_reps, obj_preds, obj_reps_, fg_labels):
             prod_reps.append( torch.cat((head_rep[pair_idx[:,0]], tail_rep[pair_idx[:,1]]), dim=-1) )
             pair_preds.append( torch.stack((obj_pred[pair_idx[:,0]], obj_pred[pair_idx[:,1]]), dim=1) )
+            sub_reps.append(edge_rep[pair_idx[:,0]])
+            sub_labels.append(fg_label[pair_idx[:,0]])
+            obj_reps.append(edge_rep[pair_idx[:,1]])
+            obj_labels.append(fg_label[pair_idx[:,1]])
+        
         prod_rep = cat(prod_reps, dim=0)
         pair_pred = cat(pair_preds, dim=0)
+        sub_reps = cat(sub_reps, dim=0)
+        sub_labels = cat(sub_labels, dim=0)
+        obj_reps = cat(obj_reps, dim=0)
+        obj_labels = cat(obj_labels, dim=0)
 
         prod_rep = self.post_cat(prod_rep)
 
+        
         if self.use_vision:
             if self.union_single_not_match:
                 prod_rep1 = prod_rep * self.up_dim(union_features)
@@ -144,13 +163,21 @@ class CumixMotifPredictor(nn.Module):
         if self.training:
             if self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_BOX:
                 rel_labels = cat(rel_labels, 0)
-                mixed_prd_embeddings, mixed_prd_cls_labels = self.cumix_head(prod_rep1, rel_labels, self.prd_weights)
+                mix_sub_embs, mix_sub_labels, mix_obj_embs, mix_obj_labels, mixed_prd_embeddings, mixed_prd_cls_labels = self.cumix_head(sub_reps, sub_labels,\
+                                                                            obj_reps, obj_labels,\
+                                                                            prod_rep1, rel_labels, self.prd_weights)
                 mix_rel_scores = self.rel_compress(mixed_prd_embeddings)
+                # mix_sub_scores = self.context_layer.decoder_rnn.out_obj(mix_sub_embs)
+                # mix_obj_scores = self.context_layer.decoder_rnn.out_obj(mix_obj_embs)
                 
                 relation_logits = cat(rel_dists, dim=0)
+                # print(mix_obj_scores.shape)
+                # exit()
                 add_losses['loss_hubness_prd'] = self.cumix_head.add_hubness_loss(mix_rel_scores)
                 add_losses['loss_hubness_prd'] += self.cumix_head.add_hubness_loss(relation_logits)
                 add_losses['loss_mixcls_prd'] = self.cumix_head.manual_CE(mix_rel_scores, mixed_prd_cls_labels)
+                # add_losses['loss_mixcls_sub'] = self.cumix_head.manual_CE(mix_sub_scores, mix_sub_labels)
+                # add_losses['loss_mixcls_obj'] = self.cumix_head.manual_CE(mix_obj_scores, mix_obj_labels)
  
         # we use obj_preds instead of pred from obj_dists
         # because in decoder_rnn, preds has been through a nms stage
@@ -224,7 +251,7 @@ class MotifPredictor(nn.Module):
         if self.attribute_on:
             obj_dists, obj_preds, att_dists, edge_ctx = self.context_layer(roi_features, proposals, logger)
         else:
-            obj_dists, obj_preds, edge_ctx, _ = self.context_layer(roi_features, proposals, logger)
+            obj_dists, obj_preds, obj_fea, edge_ctx, _ = self.context_layer(roi_features, proposals, logger)
 
         # post decode
         edge_rep = self.post_emb(edge_ctx)
@@ -267,14 +294,6 @@ class MotifPredictor(nn.Module):
         # we use obj_preds instead of pred from obj_dists
         # because in decoder_rnn, preds has been through a nms stage
         add_losses = {}
-        print(prod_rep.shape)
-        print(prod_rep1.shape)
-        print(prod_rep2.shape)
-        print(obj_dists[0].shape)
-        print(rel_dists[0].shape)
-        print(rel_labels)
-        print(cat(rel_labels, 0).shape)
-        exit()
         if self.attribute_on:
             att_dists = att_dists.split(num_objs, dim=0)
             return (obj_dists, att_dists), rel_dists, add_losses
